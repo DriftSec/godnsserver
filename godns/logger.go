@@ -31,8 +31,8 @@ var Qtypes = map[int]string{
 
 var JSON []DnsLog
 
-func LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg, answer string) {
-	if !DnsCfg.JSONDoLog {
+func (dc *DNSConfig) LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg, answer string) {
+	if !dc.JSONDoLog {
 		return
 	}
 	dl := &DnsLog{}
@@ -42,16 +42,16 @@ func LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Ms
 	dl.QName = question.Name
 	dl.Answer = answer
 	if dl.QType == "TXT" {
-		dl.Answer = DnsCfg.TXTRecords[answer]
+		dl.Answer = dc.TXTRecords[answer]
 	}
-	dl.Exfil = strings.Join(parseForExfil(question.Name), ",")
+	dl.Exfil = strings.Join(dc.parseForExfil(question.Name), ",")
 
-	appendJSONFile(*dl)
+	dc.appendJSONFile(*dl)
 }
 
-func appendJSONFile(rl DnsLog) {
+func (dc *DNSConfig) appendJSONFile(rl DnsLog) {
 	// assume err is because new file/no data
-	tmpdata, _ := os.ReadFile(DnsCfg.JSONLogFile)
+	tmpdata, _ := os.ReadFile(dc.JSONLogFile)
 	json.Unmarshal(tmpdata, &JSON)
 	JSON = append(JSON, rl)
 
@@ -60,7 +60,7 @@ func appendJSONFile(rl DnsLog) {
 		fmt.Println("[ERROR] JSON Logger:", err)
 		return
 	}
-	err = os.WriteFile(DnsCfg.JSONLogFile, data, 0755)
+	err = os.WriteFile(dc.JSONLogFile, data, 0755)
 	if err != nil {
 		log.Fatal("Failed to log JSON to file")
 	}

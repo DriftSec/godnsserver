@@ -3,15 +3,15 @@ package main
 import "godnsserver/godns"
 
 func main() {
-	godns.DnsCfg.Domain = "test.com"
-	godns.DnsCfg.DefaultAnswer = "123.1.2.44"
-	godns.DnsCfg.CustomAnswers = make(map[string]string)
-	godns.DnsCfg.CustomAnswers["test"] = "123.1.2.3"
-	godns.DnsCfg.CustomAnswers["test.google.com"] = "8.8.8.8"
-
-	godns.DnsCfg.TXTRecords = make(map[string]string)
-	godns.DnsCfg.TXTRecords["cradle"] = "IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)"
-	godns.DnsCfg.JSONDoLog = true
-	godns.DnsCfg.JSONLogFile = "./dnslog.json"
-	godns.Run()
+	c := godns.New()
+	c.Addr = "127.0.0.1"
+	c.Port = "5354"
+	c.Domain = "test.com"
+	c.DefaultAnswer = "123.1.2.44"
+	c.CustomAnswers["test"] = "123.1.2.3"
+	c.CustomAnswers["test.google.com"] = "8.8.8.8"
+	c.TXTRecords["cradle"] = "IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)IEX(blah.lbhadfasdf).DoPowershellstuff($pwn)"
+	c.JSONDoLog = true
+	c.JSONLogFile = "./dnslog.json"
+	c.Run()
 }
