@@ -42,7 +42,7 @@ func (dc *DNSConfig) LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseW
 	dl.QName = question.Name
 	dl.Answer = answer
 	if dl.QType == "TXT" {
-		dl.Answer = dc.TXTRecords[answer]
+		dl.Answer = dc.Records.TXT[answer]
 	}
 	dl.Exfil = strings.Join(dc.parseForExfil(question.Name), ",")
 

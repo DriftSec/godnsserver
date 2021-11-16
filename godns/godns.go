@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"unicode"
 
+	"github.com/driftsec/getasn"
 	"github.com/miekg/dns"
 )
 
@@ -26,22 +28,30 @@ type DNSConfig struct {
 	Addr          string
 	Port          string
 	DefaultAnswer string
-	CustomAnswers map[string]string
-	TXTRecords    map[string]string
-	Domain        string
-	Cmds          map[string]func(string)
-	JSONDoLog     bool
-	JSONLogFile   string
-	Running       bool
-	server        *dns.Server
+	Records       struct {
+		TXT map[string]string
+		A   map[string]string
+		NS  map[string]string
+		MX  map[string]string
+	}
+	Domain      string
+	Cmds        map[string]func(string)
+	JSONDoLog   bool
+	JSONLogFile string
+	Running     bool
+	server      *dns.Server
+	Blacklist   []string // slice of regex strings, compared to remote addr, question name
+	OnlyUS      bool
 }
 
 func New() *DNSConfig {
 	ret := &DNSConfig{}
 	ret.Cmds = make(map[string]func(string))
 	ret.Cmds["file"] = cmdFile
-	ret.TXTRecords = make(map[string]string)
-	ret.CustomAnswers = make(map[string]string)
+	ret.Records.A = make(map[string]string)
+	ret.Records.TXT = make(map[string]string)
+	ret.Records.NS = make(map[string]string)
+	ret.Records.MX = make(map[string]string)
 	return ret
 }
 
@@ -62,6 +72,43 @@ func (dc *DNSConfig) Run() {
 		log.Printf("Failed to start DNS server: %s\n ", err.Error())
 	}
 	dc.Running = false
+}
+func (dc *DNSConfig) Blacklisted(w dns.ResponseWriter, r *dns.Msg) (bool, *getasn.IPInfo) {
+	ipinfo, _ := getasn.GetASN(strings.Split(w.RemoteAddr().String(), ":")[0])
+	if dc.OnlyUS {
+		if ipinfo.Country != "US" {
+			log.Println("DNS Blacklisted Non US:", ipinfo.Country)
+			return true, ipinfo
+		}
+	}
+
+	if len(dc.Blacklist) == 0 {
+		return false, ipinfo
+	}
+
+	for _, regx := range dc.Blacklist {
+		rx, _ := regexp.Compile(regx)
+		if rx.MatchString(ipinfo.Org) {
+			log.Println("DNS Blacklisted ASN:", regx, ">>", ipinfo.Org)
+			return true, ipinfo
+		}
+		if rx.MatchString(ipinfo.Region) {
+			log.Println("DNS Blacklisted Region:", regx, ">>", ipinfo.Region)
+			return true, ipinfo
+		}
+		if rx.MatchString(w.RemoteAddr().String()) {
+			log.Println("DNS Blacklisted RemoteAddr:", regx, ">>", w.RemoteAddr().String())
+			return true, ipinfo
+		}
+		for _, q := range r.Question {
+			if rx.MatchString(q.Name) {
+				log.Println("DNS Blacklisted Question:", regx, ">>", q.Name)
+				return true, ipinfo
+			}
+
+		}
+	}
+	return false, ipinfo
 }
 
 func (dc *DNSConfig) handler(w dns.ResponseWriter, r *dns.Msg) {
@@ -89,17 +136,25 @@ func (dc *DNSConfig) parseQuery(m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func (dc *DNSConfig) handleA(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
-	// TODO: add blacklisting
+	blk, ipinf := dc.Blacklisted(w, r)
+	if blk {
+		rrStr := fmt.Sprintf("%s A %s", m.Question[0].Name, "")
+		rr, err := dns.NewRR(rrStr)
+		if err == nil {
+			m.Answer = append(m.Answer, rr)
+		}
+		return
+	}
 	// set default generic response
 	answer := dc.DefaultAnswer
 	// handle custom specified with full domain
-	if dc.CustomAnswers[question.Name] != "" {
-		answer = dc.CustomAnswers[question.Name]
+	if dc.Records.A[question.Name] != "" {
+		answer = dc.Records.A[question.Name]
 	}
 	// handle custom specified as just a sub
 	sub := dc.stripDomain(question.Name)
-	if dc.CustomAnswers[sub] != "" {
-		answer = dc.CustomAnswers[sub]
+	if dc.Records.A[sub] != "" {
+		answer = dc.Records.A[sub]
 	}
 
 	ex := dc.parseForExfil(question.Name)
@@ -113,26 +168,48 @@ func (dc *DNSConfig) handleA(question dns.Question, m *dns.Msg, w dns.ResponseWr
 	dc.LogQuery(question, m, w, r, answer)
 
 	if len(ex) > 0 {
-		log.Printf("A request for %s from %s\n     ├─ Response: %s\n", question.Name, w.RemoteAddr().String(), answer)
+		log.Printf("DNS: A request for %s from %s (ASN: %s)\n     ├─ Response: %s\n", question.Name, w.RemoteAddr().String(), ipinf.Org, answer)
 		fmt.Printf("     └─ Exfil data detected: %s\n", strings.Join(ex, ","))
 	} else {
-		log.Printf("A request for %s from %s\n     └─ Response: %s\n", question.Name, w.RemoteAddr().String(), answer)
+		log.Printf("A request for %s from %s (ASN: %s)\n     └─ Response: %s\n", question.Name, w.RemoteAddr().String(), ipinf.Org, answer)
 	}
 }
 
 func (dc *DNSConfig) handleTXT(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg) {
-	sub := getFirstSub(question.Name)
-	var txt string
-	if txt = dc.TXTRecords[sub]; txt == "" {
-		txt = "NOT FOUND"
+	blk, ipinf := dc.Blacklisted(w, r)
+	if blk {
+		rrStr := fmt.Sprintf("%s TXT %s", m.Question[0].Name, "")
+		rr, err := dns.NewRR(rrStr)
+		if err == nil {
+			m.Answer = append(m.Answer, rr)
+		}
+		return
 	}
+	var txt string
+	txt = "NOT FOUND"
+
+	// handle custom specified with full domain
+	if dc.Records.TXT[question.Name] != "" {
+		txt = dc.Records.TXT[question.Name]
+	}
+	// handle custom specified as just a sub
+	sub := dc.stripDomain(question.Name)
+	if dc.Records.TXT[sub] != "" {
+		txt = dc.Records.TXT[sub]
+	}
+
 	rrStr := fmt.Sprintf("%s TXT %s", question.Name, base64.StdEncoding.EncodeToString([]byte(txt)))
 	rr, err := dns.NewRR(rrStr)
 	if err == nil {
 		m.Answer = append(m.Answer, rr)
 	}
 	dc.LogQuery(question, m, w, r, sub)
-	log.Printf("TXT request for %s from %s:\n     └─ Sent: \"%s\" TXT record\n", question.Name, w.RemoteAddr().String(), sub)
+	if txt != "NOT FOUND" {
+		log.Printf("DNS: TXT request for %s from %s (ASN: %s):\n     └─ Sent: \"%s\" TXT record\n", question.Name, w.RemoteAddr().String(), ipinf.Org, sub)
+	} else {
+		log.Printf("DNS: TXT request for %s from %s (ASN: %s):\n", question.Name, w.RemoteAddr().String(), ipinf.Org)
+
+	}
 }
 
 func (dc *DNSConfig) stripDomain(d string) string {
