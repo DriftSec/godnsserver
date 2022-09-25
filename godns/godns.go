@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/driftsec/getasn"
+	"github.com/DriftSec/getasn"
 	"github.com/miekg/dns"
 )
 
@@ -21,6 +21,7 @@ import (
 
 // linux: split
 // 		dig @127.0.0.1 -p 5354 split.$(uname -a|base64 -w0|sed 's/.\{63\}/&./g').test.com
+
 // linux combine TXT
 // 		dig +short @127.0.0.1 -p 5354 cradle.test.com TXT|sed 's/ //g;s/"//g'|base64 -d
 
@@ -74,12 +75,15 @@ func (dc *DNSConfig) Run() {
 	dc.Running = false
 }
 func (dc *DNSConfig) Blacklisted(w dns.ResponseWriter, r *dns.Msg) (bool, *getasn.IPInfo) {
-	ipinfo, _ := getasn.GetASN(strings.Split(w.RemoteAddr().String(), ":")[0])
-	if dc.OnlyUS {
-		if ipinfo.Country != "US" {
-			log.Println("DNS Blacklisted Non US:", ipinfo.Country)
-			return true, ipinfo
-		}
+	ipinfo, err := getasn.GetASN(strings.Split(w.RemoteAddr().String(), ":")[0])
+	if err != nil {
+		log.Println("[ERROR] ipinfo.io:", err)
+	}
+	if dc.OnlyUS && ipinfo.Country != "" && ipinfo.Country != "US" {
+
+		log.Println("DNS Blacklisted Non US:", ipinfo.Country)
+		return true, ipinfo
+
 	}
 
 	if len(dc.Blacklist) == 0 {
@@ -87,14 +91,26 @@ func (dc *DNSConfig) Blacklisted(w dns.ResponseWriter, r *dns.Msg) (bool, *getas
 	}
 
 	for _, regx := range dc.Blacklist {
-		rx, _ := regexp.Compile(regx)
-		if rx.MatchString(ipinfo.Org) {
-			log.Println("DNS Blacklisted ASN:", regx, ">>", ipinfo.Org)
-			return true, ipinfo
+		if regx == "" {
+			continue
 		}
-		if rx.MatchString(ipinfo.Region) {
-			log.Println("DNS Blacklisted Region:", regx, ">>", ipinfo.Region)
-			return true, ipinfo
+		rx, err := regexp.Compile(regx)
+		if err != nil {
+			log.Println("[ERROR] blacklist regex", regx+":", err)
+		}
+		if ipinfo.Org != "" {
+			if rx.MatchString(ipinfo.Org) {
+				log.Println("DNS Blacklisted ASN:", regx, ">>", ipinfo.Org)
+				return true, ipinfo
+			}
+			if rx.MatchString(ipinfo.Region) {
+				log.Println("DNS Blacklisted Region:", regx, ">>", ipinfo.Region)
+				return true, ipinfo
+			}
+			if rx.MatchString(ipinfo.Country) {
+				log.Println("DNS Blacklisted Country:", regx, ">>", ipinfo.Country)
+				return true, ipinfo
+			}
 		}
 		if rx.MatchString(w.RemoteAddr().String()) {
 			log.Println("DNS Blacklisted RemoteAddr:", regx, ">>", w.RemoteAddr().String())
@@ -165,7 +181,7 @@ func (dc *DNSConfig) handleA(question dns.Question, m *dns.Msg, w dns.ResponseWr
 	if err == nil {
 		m.Answer = append(m.Answer, rr)
 	}
-	dc.LogQuery(question, m, w, r, answer)
+	dc.LogQuery(question, m, w, r, answer, *ipinf)
 
 	if len(ex) > 0 {
 		log.Printf("DNS: A request for %s from %s (ASN: %s)\n     ├─ Response: %s\n", question.Name, w.RemoteAddr().String(), ipinf.Org, answer)
@@ -203,7 +219,7 @@ func (dc *DNSConfig) handleTXT(question dns.Question, m *dns.Msg, w dns.Response
 	if err == nil {
 		m.Answer = append(m.Answer, rr)
 	}
-	dc.LogQuery(question, m, w, r, sub)
+	dc.LogQuery(question, m, w, r, sub, *ipinf)
 	if txt != "NOT FOUND" {
 		log.Printf("DNS: TXT request for %s from %s (ASN: %s):\n     └─ Sent: \"%s\" TXT record\n", question.Name, w.RemoteAddr().String(), ipinf.Org, sub)
 	} else {

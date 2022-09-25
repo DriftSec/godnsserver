@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DriftSec/getasn"
 	"github.com/miekg/dns"
 )
 
@@ -18,6 +19,7 @@ type DnsLog struct {
 	QName      string `json:"q_name"`
 	Answer     string `json:"q_answer"`
 	Exfil      string `json:"exfil"`
+	IPInfo     *getasn.IPInfo
 }
 
 var Qtypes = map[int]string{
@@ -31,7 +33,7 @@ var Qtypes = map[int]string{
 
 var JSON []DnsLog
 
-func (dc *DNSConfig) LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg, answer string) {
+func (dc *DNSConfig) LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseWriter, r *dns.Msg, answer string, ipinf getasn.IPInfo) {
 	if !dc.JSONDoLog {
 		return
 	}
@@ -41,6 +43,7 @@ func (dc *DNSConfig) LogQuery(question dns.Question, m *dns.Msg, w dns.ResponseW
 	dl.QType = Qtypes[int(question.Qtype)]
 	dl.QName = question.Name
 	dl.Answer = answer
+	dl.IPInfo = &ipinf
 	if dl.QType == "TXT" {
 		dl.Answer = dc.Records.TXT[answer]
 	}

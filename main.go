@@ -1,6 +1,6 @@
 package main
 
-import "godnsserver/godns"
+import "github.com/DriftSec/godnsserver/godns"
 
 func main() {
 	c := godns.New()
